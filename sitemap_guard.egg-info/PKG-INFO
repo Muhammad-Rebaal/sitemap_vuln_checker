@@ -1,0 +1,175 @@
+Metadata-Version: 2.4
+Name: sitemap-guard
+Version: 2.0.0
+Summary: Ultra-fast website sitemap crawler & vulnerability scanner
+Author: SiteMap Guard Contributors
+License: MIT
+Keywords: security,vulnerability-scanner,sitemap,crawler,cybersecurity,numba
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: Intended Audience :: Information Technology
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Topic :: Security
+Classifier: Topic :: Internet :: WWW/HTTP
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi>=0.100.0
+Requires-Dist: uvicorn>=0.20.0
+Requires-Dist: httpx>=0.25.0
+Requires-Dist: ultimate-sitemap-parser>=0.4.0
+Requires-Dist: playwright>=1.40.0
+Requires-Dist: click>=8.1.0
+Requires-Dist: rich>=13.7.0
+Requires-Dist: pydantic>=2.5.0
+Requires-Dist: pydantic-settings>=2.1.0
+Requires-Dist: python-dotenv>=1.0.0
+Requires-Dist: orjson>=3.9.0
+Requires-Dist: rbloom>=1.4.0
+Requires-Dist: aiosqlite>=0.19.0
+Requires-Dist: structlog>=24.1.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.23.0; extra == "dev"
+Requires-Dist: pytest-httpserver>=1.0.0; extra == "dev"
+Requires-Dist: black>=24.0.0; extra == "dev"
+Requires-Dist: ruff>=0.3.0; extra == "dev"
+Provides-Extra: linux
+Requires-Dist: uvloop>=0.19.0; extra == "linux"
+
+# 🛡️ SiteMap Guard v2
+
+**Ultra-Fast Website Sitemap Crawler & Vulnerability Scanner**
+
+SiteMap Guard is a production-grade, open-source Python CLI tool designed to autonomously crawl websites, generate complete sitemaps, and run every discovered URL through a suite of high-performance security analyzers. It detects vulnerabilities, malware, phishing attempts, and misconfigurations at blazing speeds.
+
+---
+
+## ⚡ What Makes It Fast? (Core Libraries)
+
+SiteMap Guard v2 was completely re-architected to move CPU-bound and I/O-bound bottlenecks out of standard Python:
+
+| Technology / Library | Purpose | Performance Gain |
+|---|---|---|
+| **[selectolax](https://github.com/rushter/selectolax)** | HTML DOM Parsing | 5-30x faster than BeautifulSoup (Lexbor C engine) |
+| **[aiohttp](https://docs.aiohttp.org/)** + **winloop** | Async HTTP + Event Loop | 2-5x faster non-blocking I/O |
+| **[Numba](https://numba.pydata.org/)** | Risk Score Aggregation | 50-100x faster batch processing via JIT (`@njit(parallel=True)`) |
+| **[rbloom](https://github.com/jhgg/rbloom)** | URL Deduplication | O(1) lookups in Rust; reduces memory by 90% |
+| **[orjson](https://github.com/ijl/orjson)** | JSON Serialization | 10x faster than stdlib `json` |
+| **[Obscura](https://github.com/h4ckf0r0day/obscura)** | Headless Browser | Extremely lightweight Rust-based V8 engine for JS rendering |
+
+---
+
+## 🚀 How to Use It
+
+### 1. Installation
+
+Requires Python 3.10+.
+
+```bash
+# Clone the repo and install dependencies
+pip install -e .
+
+# Download the Obscura Headless Browser binary (required for JS rendering)
+python scripts/setup_obscura.py
+```
+
+### 2. Configuration
+
+Copy the example environment file and customize your settings (e.g., concurrency limits, API keys):
+
+```bash
+cp .env.example .env
+```
+*Note: The tool works perfectly fine without API keys by relying on its local security analyzers.*
+
+### 3. CLI Commands
+
+**Full Pipeline (Crawl → Scan → Report)**
+```bash
+sitemap-guard scan https://example.com --depth 3 --concurrency 50 --format html
+```
+
+**Sitemap Generation Only**
+```bash
+sitemap-guard crawl https://example.com --depth 5
+```
+
+**Quick Single-URL Check**
+```bash
+sitemap-guard check https://example.com/login
+```
+
+---
+
+## 🏗️ Architecture & Project Structure
+
+The project follows a modular, asynchronous pipeline: **Crawl** → **Analyze** → **Report**.
+
+```text
+SiteMap/
+├── sitemap_guard/        # Core application package
+│   ├── crawler/          # Async BFS crawler using Obscura (JS rendering) & aiohttp
+│   ├── scanner/          # Security orchestrator running 8 parallel analyzers
+│   ├── reporter/         # Generates Rich terminal UI, HTML Dashboards, JSON, CSV
+│   ├── utils/            # Numba JIT scoring kernels & rbloom deduplication
+│   ├── orchestrator.py   # Main pipeline coordinator
+│   └── cli.py            # Click-based Command Line Interface
+├── scripts/              # Setup and utility scripts (e.g., setup_obscura.py)
+├── bin/                  # Downloaded executables (Obscura binary resides here)
+├── reports/              # Output directory for HTML, JSON, and CSV reports
+├── .env.example          # Template for environment variables and configuration
+├── pyproject.toml        # Build configuration and dependency declarations
+└── sitemap_guard.db      # SQLite database for persistent session storage
+```
+
+### Security Analyzers
+1. **SSL/TLS**: Certificate validity, weak ciphers.
+2. **Headers**: 9 OWASP security headers (HSTS, CSP, etc.).
+3. **Content**: Obfuscated JS, hidden iframes, crypto-miners.
+4. **DNS**: DNSSEC, SPF, DMARC misconfigurations.
+5. **Tech Detect**: Server, CMS, and framework fingerprinting.
+6. **VirusTotal** (Optional): Queries 70+ AV engines.
+7. **Google Safe Browsing** (Optional): Checks against Google's malware database.
+8. **PhishTank**: Validates against known phishing signatures.
+
+---
+
+## ⚠️ Current Pitfalls & Limitations
+
+While highly optimized, the current architecture has a few known pitfalls:
+
+1. **DNS Resolution Issues with `winloop`:** On certain Windows environments, the aggressive asynchronous event loop (`winloop`) coupled with `aiohttp` can drop DNS resolution requests (`Cannot connect to host... ssl:False [Could not contact DNS servers]`).
+2. **Obscura Process Spawning Overhead:** Currently, the crawler spawns a new `obscura fetch` subprocess for JS-heavy pages. While Obscura is lightweight, creating thousands of subprocesses rapidly can exhaust OS file descriptors or create CPU bottlenecks compared to maintaining a persistent CDP (Chrome DevTools Protocol) connection pool.
+3. **Numba "Cold Start":** The first time a scan finishes, the Numba JIT compiler takes a few seconds to compile the risk-scoring functions into machine code. Subsequent scans execute instantly.
+4. **Memory Consumption on Massive Sites:** Even with Bloom filters, tracking millions of `CrawledURL` objects in memory before saving to the SQLite database can be memory-intensive. 
+
+---
+
+## 🔗 Alternative Free & Open Source Libraries
+
+If you want to build or extend similar functionalities, consider these excellent open-source alternatives:
+
+**Crawling & Scraping:**
+- **[Scrapy](https://scrapy.org/)**: The industry standard for Python web scraping (though async integration can be clunky).
+- **[Playwright](https://playwright.dev/python/) / [Puppeteer](https://pptr.dev/)**: The gold standard for headless browser automation (heavier than Obscura but highly reliable).
+- **[Crawlee](https://crawlee.dev/)**: A modern scraping library built for scale (primarily Node.js, but Python support is growing).
+
+**Vulnerability Scanning:**
+- **[Nuclei](https://github.com/projectdiscovery/nuclei)**: Template-based vulnerability scanner (Incredible performance, written in Go).
+- **[OWASP ZAP](https://www.zaproxy.org/)**: The world's most widely used web app scanner (Java-based, very comprehensive).
+- **[Nikto](https://github.com/sullo/nikto)**: A classic Perl-based web server scanner.
+
+**HTML Parsing:**
+- **[BeautifulSoup](https://www.crummy.com/software/BeautifulSoup/)**: Highly forgiving HTML parser (but much slower than selectolax).
+- **[lxml](https://lxml.de/)**: C-based XML and HTML parser (very fast, but selectolax often edges it out for pure DOM tree extraction).
+
+---
+
+## 📜 License & Ethical Use
+
+MIT License — Free for personal and commercial use.
+
+This tool is designed for **authorized security testing only**. Always respect `robots.txt`, utilize appropriate rate limiting, and only scan targets you explicitly own or have permission to audit.
