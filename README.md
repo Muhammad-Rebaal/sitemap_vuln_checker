@@ -1,88 +1,97 @@
-# 🛡️ SiteMap Guard v3
-**The Ultra-Fast, Offline-First Security Orchestrator & Intelligence Mapper**
+# 🛡️ SiteMap Guard
 
-SiteMap Guard v3 is a production-grade, open-source security tool designed for high-performance website reconnaissance and vulnerability auditing. It automates the discovery of hidden assets, probes for live services, and executes deep vulnerability scans—all while maintaining an **entirely offline-first** philosophy for privacy and speed.
+**An Autonomous, Offline-First Web Vulnerability & Sitemap Scanner**
 
----
-
-## 🚀 Key Features
-
-### 1. 🤖 Autonomous Asset Discovery
-*   **Recursive Sitemap Parsing**: Deep-dives into XML sitemaps and `robots.txt` to map the entire application structure.
-*   **Resilient Probing**: Uses **TLS Impersonation (`-tlsi`)** to bypass server-side blocks and SSL handshake failures (`SSLEOFError`).
-*   **Probing Fallback**: Intelligent logic ensures that even if a host fails a ping/probe, the scan continues using discovered sitemap URLs as a fallback.
-
-### 2. 🔍 Deep Vulnerability Scanning
-*   **Nuclei Integration**: Powered by [Nuclei](https://github.com/projectdiscovery/nuclei), supporting 5,000+ community-maintained security templates.
-*   **High Concurrency**: Tuned for asynchronous execution, capable of scanning hundreds of endpoints in seconds.
-*   **Smart Deduplication**: Automatically cleans and groups repetitive findings into a concise, actionable report.
-
-### 3. 🗺️ Intelligence Flowcharts (V3 Exclusive)
-*   **Interactive Topology**: Generates a self-contained HTML graph of your site structure.
-*   **Security Heatmap**: Nodes are color-coded by severity (**Red** for Critical, **Yellow** for Medium, **Blue** for Info).
-*   **Exploded Insights**: "Explodes" tech stacks and vulnerabilities into the visual tree so you can see findings at a glance without digging through logs.
-*   **Fully Offline**: Embedded ECharts engine means reports work perfectly in air-gapped environments.
-
-### 4. 🛡️ Privacy-First Reputation
-*   **Zero-API Threat Scanning**: Uses Rust-powered **Bloom Filters** to check URLs against community threat feeds (URLHaus, OpenPhish) locally.
-*   **No Data Leaks**: Your target URLs are never sent to third-party services like VirusTotal or Google Safe Browsing.
+SiteMap Guard is a professional-grade security intelligence platform built to bridge the gap between simple sitemap crawling and deep, context-aware vulnerability scanning. It automatically discovers endpoints, bypasses legacy TLS restrictions, fingerprints web technologies, harvests embedded secrets, and generates highly actionable security reports.
 
 ---
 
-## 🏗️ Core Components & Architecture
+## 🚀 Features at a Glance
 
-| Module | Purpose | Key Logic |
-|---|---|---|
-| **`cli.py`** | Entry Point | Click-based interface, handles Rich console tables and Windows UTF-8 encoding. |
-| **`pipeline.py`** | Orchestrator | Manages the flow: `Discovery` ➔ `httpx Probe` ➔ `Nuclei Scan` ➔ `Threat Feed Lookup`. |
-| **`flowchart.py`** | Visualization | Transforms JSON findings into a high-fidelity D3/ECharts intelligence map. |
-| **`threat_feeds.py`** | Local Intel | Handles JIT downloading and caching of malware/phishing feeds into local Bloom filters. |
-| **`config.py`** | Configuration | Centralized Pydantic-based settings for timeouts, concurrency, and binary paths. |
-
----
-
-## ⚡ Technical Specifications
-
-*   **Engine**: Python 3.10+ (Asynchronous / `asyncio`)
-*   **Reputation**: Rust-based `rbloom` for O(1) membership testing.
-*   **Visuals**: Apache ECharts (Minified & Embedded).
-*   **Binaries**: Utilizes pre-compiled Go binaries for `nuclei` and `httpx`.
+*   **Deep Endpoint Discovery:** Combines active probing (robots.txt, sitemaps, tech-aware wordlists) with **Passive Reconnaissance** (Wayback Machine, CommonCrawl, AlienVault OTX) to find hidden or historical endpoints.
+*   **Resilient TLS Probing:** Custom SSL wrappers automatically downgrade or bypass strict TLS requirements, ensuring the scanner successfully connects to legacy or hardened targets without throwing `UNEXPECTED_EOF` errors.
+*   **Smart Soft-404 Filter:** Uses blazingly fast `xxhash` body hashing to automatically detect "Catch-All" servers, eliminating false positives caused by generic 200 OK or 302 redirects.
+*   **JS Secret Harvester:** Extracts JavaScript files from live pages and scans them against 30+ regex patterns to catch exposed AWS keys, Stripe tokens, JWTs, and internal API endpoints.
+*   **Actionable Remediation Engine:** Doesn't just tell you what's broken. Every finding in the report includes a `[FIX]` instruction detailing exactly how to remediate the vulnerability.
+*   **Stateful Scan Diffing:** Powered by an asynchronous SQLite persistence layer (`sitemap_guard_v4.db`), the scanner tracks changes over time, highlighting `[+] New Vulnerabilities` or `[✓] Fixed Vulnerabilities` between runs.
+*   **Modular Plugin System:** Easily extend the scanner's capabilities by dropping new Python scripts into the `plugins/` folder (e.g., Open Redirects, Advanced CORS).
 
 ---
 
-## 📖 Quick Start
+## 🏗️ How the Pipeline Flows
 
-### Installation
-```bash
-# Clone and Install
-git clone https://github.com/sitemap-guard/sitemap-guard.git
-cd sitemap-guard
-pip install -e .
+When you initiate a scan, the `BugBountyPipeline` orchestrates the following flow:
 
-# Ensure binaries are in ./bin/
-# nuclei.exe, httpx.exe, etc.
+1.  **DNS & Passive Reconnaissance:** Queries global DNS servers to map the infrastructure (A, MX, NS records, Subdomains) while concurrently pulling historical URLs from free archives (Wayback, CommonCrawl).
+2.  **Tech Fingerprinting & Active Discovery:** Hits the root URL to identify the underlying technology (e.g., WordPress, LiteSpeed, PHP). Based on the detected tech, it injects highly specific paths (like `wp-config.php.bak` or `/.env`) into the active discovery queue.
+3.  **Resilient Probing:** Attempts to visit every discovered URL. It automatically filters out Soft-404s (fake "live" pages) and unreachable endpoints, passing only genuinely live targets to the next stage.
+4.  **Deep Scanning:**
+    *   **Header Scanner:** Checks for missing security headers (HSTS, CSP, etc.).
+    *   **JS Scanner:** Parses live HTML, fetches all linked `.js` files, and hunts for secrets.
+    *   **Plugins:** Runs custom modules like CORS or Open Redirect checkers.
+    *   **Threat Feeds:** Cross-references the URLs against offline Bloom filters populated by OSINT threat feeds.
+5.  **Diffing & Reporting:** Saves the results to the SQLite database, calculates the difference from the last scan, and outputs a highly readable `scan_report.txt` and a programmatic `full_results.json`.
+
+---
+
+## 📂 Architecture & Component Breakdown
+
+The codebase is highly modular, separating orchestration, scanning, and utilities.
+
+```text
+sitemap_guard/
+├── cli.py                    # The Command Line Interface and rich TXT reporting engine.
+├── pipeline.py               # The Core Orchestrator. Wires all components and dictates the scan flow.
+├── config.py                 # Pydantic-based configuration management (.env support).
+├── api.py                    # FastAPI backend for programmatic execution.
+│
+├── scanner/
+│   └── headers.py            # Analyzes HTTP responses for missing/misconfigured security headers.
+│
+├── plugins/                  # 🔌 Extensible Plugin System
+│   ├── __init__.py           # Dynamic plugin loader (auto-discovers GuardPlugin subclasses).
+│   ├── base.py               # The GuardPlugin base class.
+│   ├── cors_advanced.py      # Plugin: Tests for permissive CORS origins (null, evil.com).
+│   └── open_redirect.py      # Plugin: Detects unsafe Location header redirects.
+│
+├── storage/                  # 💾 Persistence Layer
+│   └── db.py                 # Async SQLite engine. Saves scans and calculates Diff logic.
+│
+└── utils/                    # 🛠️ Core Utilities & Engines
+    ├── dns_recon.py          # Extracts A, AAAA, MX, NS, DMARC, and enumerates subdomains.
+    ├── fingerprint.py        # Identifies Servers, CMS, Frameworks, and Analytics from headers/body.
+    ├── js_scanner.py         # The Regex engine that harvests secrets from Javascript files.
+    ├── passive_recon.py      # Queries Wayback Machine, CommonCrawl, and OTX for historical URLs.
+    ├── probe.py              # The HTTP request engine. Features legacy TLS fallback and Soft-404 filtering.
+    ├── remediations.py       # Maps vulnerability names to human-readable FIX instructions.
+    └── threat_feeds.py       # Offline Bloom filter checking against known malicious URL lists.
 ```
 
-### Run a Standard Scan
+### Deep Dive into Key Files
+
+#### `pipeline.py`
+The absolute heart of the project. The `BugBountyPipeline` class manages the concurrency limits via `asyncio`. It handles the failovers (e.g., if a high-speed binary like `httpx` fails, it falls back to our custom `fallback_probe` in `probe.py`). It is responsible for mixing the "Tech-Aware Wordlists" dynamically.
+
+#### `utils/probe.py`
+One of the most complex utilities. It solves two major industry problems:
+1.  **Strict TLS Servers:** Government or legacy servers often reject modern Python TLS handshakes. This file implements a custom `_LegacySSLAdapter` and falls back to thread-pooled `requests` when `aiohttp` fails.
+2.  **Soft-404s:** It implements a "Canary" system. Before scanning, it requests `/sitemap_guard_canary_random123`, takes an `xxhash` of the response, and uses that baseline to filter out "fake" 200 OK responses.
+
+#### `utils/remediations.py`
+A simple but highly effective dictionary mapping. Instead of just dumping "Missing HSTS" into a report, `cli.py` queries this module to append precise mitigation instructions (e.g., "Add the Strict-Transport-Security header to your web server config").
+
+#### `storage/db.py`
+Powered by `aiosqlite`. It maintains a local `sitemap_guard_v4.db`. When `get_diff()` is called, it performs set mathematics between the current findings and the previous `scan_id` to identify newly introduced vulnerabilities or recently fixed issues.
+
+---
+
+## 🛠️ Usage
+
+**Run a complete scan against a target:**
 ```bash
-python -m sitemap_guard.cli scan https://target-website.com
+python -m sitemap_guard.cli scan https://example.com/
 ```
 
-### Review Results
-*   **Terminal**: Real-time summary tables for Tech Stack and Vulnerabilities.
-*   **Report**: Check `./reports/sitemap_flowchart.html` for the interactive intelligence graph.
-*   **Logs**: Deep JSON logs in `./reports/nuclei_out.json` and `./reports/probe_results.json`.
-
----
-
-## 🔧 Windows Optimization
-SiteMap Guard is uniquely optimized for Windows security environments:
-*   **UTF-8 Forced**: Automatically reconfigures `sys.stdout` to prevent `UnicodeEncodeError` on complex findings.
-*   **Binary Management**: Seamlessly invokes `.exe` binaries from the local `bin/` directory.
-
----
-
-## 📜 Ethical Use & Disclaimer
-This tool is designed for **authorized security testing only**. Always respect `robots.txt`, utilize appropriate rate limiting, and only scan targets you explicitly own or have permission to audit.
-
-Developed with ❤️ by the SiteMap Guard Team.
+**Results are saved in the `./reports/` directory:**
+*   `scan_report.txt`: A highly readable, human-friendly security report.
+*   `full_results.json`: A machine-readable dump for integration into other CI/CD pipelines.

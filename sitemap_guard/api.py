@@ -1,12 +1,21 @@
 from fastapi import FastAPI, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import asyncio
 from typing import Dict, Any
 import uuid
+import json
 
 from sitemap_guard.pipeline import BugBountyPipeline
 
-app = FastAPI(title="SiteMap Guard v3 API")
+app = FastAPI(title="SiteMap Guard v4 API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Simple in-memory task store for MVP
 tasks_store: Dict[str, Dict[str, Any]] = {}
@@ -23,8 +32,10 @@ async def start_scan(req: ScanRequest, background_tasks: BackgroundTasks):
         pipeline = BugBountyPipeline(target)
         try:
             results = await pipeline.run()
+            # Ensure serialization of datetimes/paths
+            safe_results = json.loads(json.dumps(results, default=str))
             tasks_store[tid]["status"] = "completed"
-            tasks_store[tid]["results"] = results
+            tasks_store[tid]["results"] = safe_results
         except Exception as e:
             tasks_store[tid]["status"] = "failed"
             tasks_store[tid]["error"] = str(e)
