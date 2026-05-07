@@ -12,6 +12,7 @@ import uvicorn
 import sys
 
 from sitemap_guard.pipeline import BugBountyPipeline
+from sitemap_guard.reporter.enhanced_sitemap_report import EnhancedSitemapReporter
 
 console = Console()
 
@@ -455,6 +456,48 @@ def serve(host: str, port: int):
         border_style="green"
     ))
     uvicorn.run("sitemap_guard.api:app", host=host, port=port, reload=True)
+
+
+@cli.command()
+@click.argument("url")
+@click.option("--output", default="./reports", help="Output directory")
+@click.option("--full-scan", is_flag=True, default=False,
+              help="Run the full vulnerability pipeline before classifying URLs.")
+def sitemap(url: str, output: str, full_scan: bool):
+    """
+    Generate the enhanced sitemap report:
+        URL | Status | Classification | Redirect
+
+    Saved as <domain>_report_<YYYYMMDD_HHMMSS>.txt in the output directory.
+    """
+    console.print(Panel.fit(
+        f"[bold blue]Enhanced Sitemap Reporter[/]\n"
+        f"Target: [cyan]{url}[/]\n"
+        f"Mode  : [yellow]{'Full scan + classify' if full_scan else 'Discovery + classify (fast)'}[/]",
+        border_style="blue",
+    ))
+
+    async def _run() -> str:
+        scan_results: dict = {}
+        if full_scan:
+            with console.status("[bold green]Running full pipeline...[/]"):
+                pipeline = BugBountyPipeline(target_url=url, output_dir=output)
+                scan_results = await pipeline.run()
+
+        reporter = EnhancedSitemapReporter(target_url=url, output_dir=output)
+        with console.status("[bold green]Discovering URLs and classifying...[/]"):
+            return await reporter.generate_enhanced_report(scan_results)
+
+    try:
+        report_path = asyncio.run(_run())
+    except KeyboardInterrupt:
+        console.print("[yellow]Interrupted by user.[/]")
+        return
+    except Exception as e:
+        console.print(f"[bold red]Error:[/] {e}")
+        raise
+
+    console.print(f"\n[bold green]Sitemap report generated:[/] [cyan]{report_path}[/]")
 
 
 if __name__ == "__main__":
