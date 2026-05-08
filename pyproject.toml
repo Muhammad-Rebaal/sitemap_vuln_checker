@@ -29,6 +29,7 @@ dependencies = [
     "fastapi>=0.100.0",
     "uvicorn>=0.20.0",
     "httpx>=0.25.0",
+    "aiohttp>=3.9.0",
     # ── Sitemap Parsing ──────────────────────────────────
     "ultimate-sitemap-parser>=0.4.0",
     # ── Headless Browser CDP ─────────────────────────────
@@ -64,7 +65,7 @@ linux = [
 ]
 
 [project.scripts]
-sitemap-guard = "sitemap_guard.cli:cli"
+sitemap-guard = "sitemap_guard.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["sitemap_guard*"]

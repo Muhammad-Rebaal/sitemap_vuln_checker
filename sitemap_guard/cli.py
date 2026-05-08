@@ -11,10 +11,31 @@ from rich import box
 import uvicorn
 import sys
 
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
+
 from sitemap_guard.pipeline import BugBountyPipeline
 from sitemap_guard.reporter.enhanced_sitemap_report import EnhancedSitemapReporter
 
 console = Console()
+
+
+def _try_uvloop_policy() -> None:
+    if sys.platform == "win32":
+        return
+    try:
+        import uvloop  # type: ignore[import-untyped]
+
+        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+    except ImportError:
+        pass
+
 
 if sys.platform == "win32":
     try:
@@ -467,12 +488,19 @@ def scan(url: str, output: str):
     default=False,
     help="Also probe third-party CSS/JS URLs found in HTML (CDNs, etc.).",
 )
+@click.option(
+    "--workers",
+    default=96,
+    type=click.IntRange(8, 320),
+    help="Concurrent async HTTP workers for discovery + probe. Default 96.",
+)
 def sitemap(
     url: str,
     output: str,
     max_urls: int,
     full_scan: bool,
     include_external_assets: bool,
+    workers: int,
 ):
     """
     Enhanced sitemap report (URL | Status | Classification | Redirect).
@@ -493,6 +521,7 @@ def sitemap(
     )
 
     def _run() -> str:
+        _try_uvloop_policy()
         scan_results: dict = {}
         if full_scan:
             with console.status("[bold green]Running full pipeline...[/]"):
@@ -504,8 +533,20 @@ def sitemap(
             output_dir=output,
             max_urls=max_urls,
             include_external_assets=include_external_assets,
+            workers=workers,
         )
-        return asyncio.run(reporter.generate_enhanced_report(scan_results))
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(bar_width=None),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            console=console,
+            transient=False,
+        ) as progress:
+            return asyncio.run(
+                reporter.generate_enhanced_report(scan_results, progress=progress)
+            )
 
     try:
         report_path = _run()
