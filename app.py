@@ -3,17 +3,17 @@ import requests
 import time
 import pandas as pd
 
-# Configuration
+# ── Configuration ─────────────────────────────────────────────────────────────
 API_URL = "http://localhost:8000"
 
 st.set_page_config(
     page_title="SiteMap Guard Dashboard",
-    page_icon="shield",
+    page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# Custom CSS
+# ── Custom CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
     .metric-card {
@@ -29,19 +29,19 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Header
-st.title("SiteMap Guard v4.0 - Security Scanner")
+# ── Header ────────────────────────────────────────────────────────────────────
+st.title("🛡️ SiteMap Guard v4.0")
 st.subheader("Autonomous Web Vulnerability & Sitemap Scanner")
 st.markdown("Enter a target domain below to initiate a deep security scan.")
 
-# Input Area
+# ── Input Area ────────────────────────────────────────────────────────────────
 col1, col2 = st.columns([3, 1])
 with col1:
     target_url = st.text_input("Target URL", placeholder="https://example.com/", label_visibility="collapsed")
 with col2:
     scan_btn = st.button("Launch Scan", use_container_width=True, type="primary")
 
-# State Management
+# ── State Management ──────────────────────────────────────────────────────────
 if "task_id" not in st.session_state:
     st.session_state.task_id = None
 if "scan_status" not in st.session_state:
@@ -49,7 +49,7 @@ if "scan_status" not in st.session_state:
 if "scan_results" not in st.session_state:
     st.session_state.scan_results = None
 
-# Trigger Scan
+# ── Trigger Scan ──────────────────────────────────────────────────────────────
 if scan_btn and target_url:
     if not target_url.startswith("http"):
         target_url = "https://" + target_url
@@ -67,7 +67,7 @@ if scan_btn and target_url:
         except requests.exceptions.ConnectionError:
             st.error("Cannot connect to FastAPI backend. Is it running on http://localhost:8000 ?")
 
-# Polling & Status
+# ── Polling & Status ──────────────────────────────────────────────────────────
 if st.session_state.task_id and st.session_state.scan_status == "running":
     status_container = st.empty()
     progress_bar = st.progress(0)
@@ -80,24 +80,24 @@ if st.session_state.task_id and st.session_state.scan_status == "running":
                 status = data.get("status")
                 
                 if status == "running":
-                    status_container.info(f"[RUNNING] Scan is running on target: {data.get('target', target_url)}... Please wait (this may take a few minutes depending on passive recon).")
+                    status_container.info(f"⏳ Scan is running on target: {data.get('target', target_url)}... Please wait (this may take a few minutes depending on passive recon).")
                 elif status == "completed":
                     st.session_state.scan_status = "completed"
                     st.session_state.scan_results = data.get("results")
                     progress_bar.progress(100)
-                    status_container.success("[SUCCESS] Scan completed successfully!")
+                    status_container.success("✅ Scan completed successfully!")
                     break
                 elif status == "failed":
                     st.session_state.scan_status = "failed"
                     error_msg = data.get("error", "Unknown error")
-                    status_container.error(f"[ERROR] Scan failed: {error_msg}")
+                    status_container.error(f"❌ Scan failed: {error_msg}")
                     break
         except Exception as e:
             status_container.warning(f"Connection issue while polling: {e}")
             
         time.sleep(3)
 
-# Results Dashboard
+# ── Results Dashboard ─────────────────────────────────────────────────────────
 if st.session_state.scan_results:
     results = st.session_state.scan_results
     
@@ -117,27 +117,6 @@ if st.session_state.scan_results:
 
     total_vulns = len(real_header) + len(nuclei_findings) + len(threat_findings) + len(js_secrets) + len(plugin_findings)
 
-    # Enhanced Report Download
-    comprehensive_reports = results.get("comprehensive_reports", {})
-    if comprehensive_reports:
-        enhanced_report_path = comprehensive_reports.get("enhanced_report_path")
-        html_report_path = comprehensive_reports.get("html_report_path")
-        
-        if enhanced_report_path:
-            try:
-                with open(enhanced_report_path, 'r', encoding='utf-8') as f:
-                    report_content = f.read()
-                
-                st.download_button(
-                    label="Download Enhanced Sitemap Report",
-                    data=report_content,
-                    file_name=f"{results.get('target', 'site').replace('https://', '').replace('http://', '').replace('/', '_')}_enhanced_report.txt",
-                    mime="text/plain",
-                    use_container_width=True
-                )
-            except Exception:
-                pass
-
     # Metrics Row
     st.markdown("---")
     m1, m2, m3, m4 = st.columns(4)
@@ -149,9 +128,9 @@ if st.session_state.scan_results:
     st.markdown("---")
 
     # Tabs
-    t1, t2, t3, t4, t5, t6 = st.tabs(["Infrastructure", "Live Endpoints", "Vulnerabilities", "Secrets & Plugins", "Scan History (Diff)", "Enhanced Sitemap"])
+    t1, t2, t3, t4, t5 = st.tabs(["🌐 Infrastructure", "🔗 Live Endpoints", "🚨 Vulnerabilities", "🔑 Secrets & Plugins", "🔄 Scan History (Diff)"])
     
-    # Tab 1: Infrastructure
+    # ── Tab 1: Infrastructure ──
     with t1:
         st.subheader("DNS Reconnaissance")
         dns_col1, dns_col2 = st.columns(2)
@@ -170,7 +149,7 @@ if st.session_state.scan_results:
             sub_df = pd.DataFrame([{"Subdomain": s["subdomain"], "IPs": ", ".join(s["ips"])} for s in subs])
             st.dataframe(sub_df, use_container_width=True, hide_index=True)
 
-    # Tab 2: Live Endpoints
+    # ── Tab 2: Live Endpoints ──
     with t2:
         st.subheader("Discovered Pages & API Routes")
         if real_live:
@@ -186,7 +165,7 @@ if st.session_state.scan_results:
         else:
             st.info("No live endpoints discovered.")
 
-    # Tab 3: Vulnerabilities
+    # ── Tab 3: Vulnerabilities ──
     with t3:
         st.subheader("Security Header Findings")
         if real_header:
@@ -206,6 +185,9 @@ if st.session_state.scan_results:
                     seen_hdr[key]["Affected URLs"] += 1
 
             st.dataframe(pd.DataFrame(list(seen_hdr.values())), use_container_width=True, hide_index=True)
+            
+            # Show remediations logic natively here if needed, but the cli.py pulls from remediations module. 
+            # For simplicity, we just list the raw details here.
         else:
             st.success("No header misconfigurations found!")
 
@@ -228,7 +210,7 @@ if st.session_state.scan_results:
             } for f in threat_findings])
             st.dataframe(threat_df, use_container_width=True, hide_index=True)
 
-    # Tab 4: Secrets & Plugins
+    # ── Tab 4: Secrets & Plugins ──
     with t4:
         st.subheader("JavaScript Secrets Harvested")
         if js_secrets:
@@ -254,7 +236,7 @@ if st.session_state.scan_results:
         else:
             st.info("No plugin vulnerabilities triggered.")
 
-    # Tab 5: Scan History (Diff)
+    # ── Tab 5: Scan History (Diff) ──
     with t5:
         st.subheader("Changes Since Last Scan")
         if not diff or not any(diff.values()):
@@ -262,77 +244,21 @@ if st.session_state.scan_results:
         else:
             c1, c2 = st.columns(2)
             with c1:
-                st.markdown("### New Discoveries")
+                st.markdown("### 📈 New Discoveries")
                 if diff.get("new_urls"):
                     st.success(f"{len(diff['new_urls'])} New URLs Discovered")
                     with st.expander("View New URLs"):
-                        for u in diff['new_urls']: 
-                            st.code(u)
+                        for u in diff['new_urls']: st.code(u)
                 if diff.get("new_findings"):
                     st.error(f"{len(diff['new_findings'])} New Vulnerabilities")
                     with st.expander("View New Findings"):
-                        for f in diff['new_findings']: 
-                            st.markdown(f"- **{f[0]}** at {f[1]}")
+                        for f in diff['new_findings']: st.markdown(f"- **{f[0]}** at {f[1]}")
                         
             with c2:
-                st.markdown("### Remediations / Removals")
+                st.markdown("### 📉 Remediations / Removals")
                 if diff.get("gone_urls"):
                     st.warning(f"{len(diff['gone_urls'])} URLs Offline")
                 if diff.get("fixed_findings"):
                     st.success(f"{len(diff['fixed_findings'])} Vulnerabilities Fixed")
                     with st.expander("View Fixed Findings"):
-                        for f in diff['fixed_findings']: 
-                            st.markdown(f"- **{f[0]}** at {f[1]}")
-
-    # Tab 6: Enhanced Sitemap
-    with t6:
-        st.subheader("Enhanced Sitemap Report")
-        
-        if comprehensive_reports:
-            # Display statistics
-            internal_pages = comprehensive_reports.get('internal_pages_found', 0)
-            accessible_pages = comprehensive_reports.get('accessible_internal_pages', 0)
-            file_types = comprehensive_reports.get('file_types_discovered', [])
-            
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Internal Pages Found", internal_pages)
-            col2.metric("Accessible Pages", accessible_pages)
-            col3.metric("File Types", len(file_types))
-            
-            if file_types:
-                st.markdown(f"**File Types Discovered:** {', '.join(file_types)}")
-            
-            # Show report paths
-            enhanced_path = comprehensive_reports.get('enhanced_report_path')
-            html_path = comprehensive_reports.get('html_report_path')
-            
-            if enhanced_path:
-                st.success(f"Enhanced report saved to: {enhanced_path}")
-            if html_path:
-                st.success(f"HTML report (clickable) saved to: {html_path}")
-                st.markdown("**Open the HTML report in your browser for clickable links!**")
-            
-            # Try to display some content
-            if enhanced_path:
-                try:
-                    with open(enhanced_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                    
-                    # Show first part of the report
-                    lines = content.split('\n')
-                    preview_lines = lines[:50]  # First 50 lines
-                    
-                    st.text_area(
-                        "Report Preview",
-                        value='\n'.join(preview_lines),
-                        height=300,
-                        help="URL | Status | Classification | Redirect format"
-                    )
-                    
-                    if len(lines) > 50:
-                        st.info(f"Showing first 50 lines of {len(lines)} total lines. Download full report above.")
-                        
-                except Exception as e:
-                    st.error(f"Could not load report preview: {str(e)}")
-        else:
-            st.info("Enhanced sitemap report will be available after running a complete scan.")
+                        for f in diff['fixed_findings']: st.markdown(f"- **{f[0]}** at {f[1]}")

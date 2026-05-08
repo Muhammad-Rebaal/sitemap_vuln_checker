@@ -1,6 +1,6 @@
 """
-Enhanced sitemap reporter that generates URL | Status | Classification | Redirect
-format reports with vulnerability classification (clean/virus).
+Enhanced sitemap reporter — plain-text report aligned with:
+URL | Status | Classification | Redirect | Reason
 
 Output filename: <domain>_report_<YYYYMMDD_HHMMSS>.txt
 """
@@ -18,13 +18,14 @@ import structlog
 logger = structlog.get_logger()
 
 
+REPORT_VERSION = "v4.2"
+_SEP = "=" * 100
+
+
 class EnhancedSitemapReporter:
     """
-    Enhanced reporter that creates comprehensive sitemap reports with:
-    - URL | Status | Classification | Redirect format
-    - Vulnerability classification (clean/virus)
-    - Complete link discovery and redirect tracking
-    - Domain-based report naming (<domain>_report_<date_time>.txt)
+    Enhanced reporter: discovery, probe, classify (clean / issue / virus), Reason column,
+    domain-based filename (<domain>_report_<date_time>.txt).
     """
 
     DEFAULT_HEADERS = {
@@ -64,13 +65,21 @@ class EnhancedSitemapReporter:
         r"data:text/html",         # Data URI HTML
     ]
 
-    def __init__(self, target_url: str, output_dir: str = "./reports"):
+    def __init__(
+        self,
+        target_url: str,
+        output_dir: str = "./reports",
+        max_urls: int = 5000,
+        include_external_assets: bool = False,
+    ):
         if not target_url.startswith(("http://", "https://")):
             target_url = "https://" + target_url
         self.target_url = target_url.rstrip("/")
         self.domain = urlparse(self.target_url).netloc or self.target_url
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.max_urls = max(0, int(max_urls))
+        self.include_external_assets = include_external_assets
 
         self.ssl_context = ssl.create_default_context()
         self.ssl_context.check_hostname = False
@@ -89,8 +98,11 @@ class EnhancedSitemapReporter:
         logger.info("enhanced_reporter.starting", domain=self.domain)
 
         all_urls = await self._collect_all_urls(scan_results)
+        all_urls = self._dedupe_cap_urls(all_urls)
         url_data = await self._process_urls(all_urls)
         classified_data = self._classify_vulnerabilities(url_data, scan_results)
+        finding_msgs = self._finding_messages_by_url(scan_results)
+        self._attach_reasons(classified_data, finding_msgs)
         report_path = self._generate_report_file(classified_data)
 
         logger.info(
@@ -134,6 +146,21 @@ class EnhancedSitemapReporter:
             extracted = await self._extract_links_from_pages(session, [self.target_url])
             urls.update(extracted)
         return list(urls)
+
+    def _dedupe_cap_urls(self, urls: List[str]) -> List[str]:
+        ordered: List[str] = []
+        seen = set()
+        for u in urls:
+            if u and u not in seen:
+                seen.add(u)
+                ordered.append(u)
+        if not self.max_urls or len(ordered) <= self.max_urls:
+            return ordered
+        head: List[str] = []
+        if self.target_url in ordered:
+            head.append(self.target_url)
+        rest = [u for u in ordered if u != self.target_url][: max(0, self.max_urls - len(head))]
+        return head + rest
 
     def _make_session(self, timeout: int = 10) -> aiohttp.ClientSession:
         return aiohttp.ClientSession(
@@ -204,6 +231,8 @@ class EnhancedSitemapReporter:
 
     _HREF_RE = re.compile(r'(?:href|src|action)=["\']([^"\']+)["\']', re.IGNORECASE)
 
+    _ASSET_SUFFIXES = (".css", ".js", ".mjs", ".woff", ".woff2", ".map")
+
     def _extract_links_from_html(self, html_content: str, base_url: str) -> List[str]:
         links = []
         for raw in self._HREF_RE.findall(html_content):
@@ -214,8 +243,17 @@ class EnhancedSitemapReporter:
                 link = "https:" + link
             full_url = urljoin(base_url, link)
             parsed = urlparse(full_url)
-            if parsed.netloc and (parsed.netloc == self.domain or parsed.netloc.endswith("." + self.domain)):
+            if not parsed.netloc or not parsed.scheme.startswith("http"):
+                continue
+            same_host = parsed.netloc == self.domain or (
+                bool(self.domain) and parsed.netloc.endswith("." + self.domain)
+            )
+            if same_host:
                 links.append(full_url)
+            elif self.include_external_assets:
+                path_only = full_url.split("?", 1)[0].lower()
+                if any(path_only.endswith(suf) for suf in self._ASSET_SUFFIXES):
+                    links.append(full_url)
         return links
 
     async def _process_urls(self, urls: List[str]) -> List[Dict[str, Any]]:
@@ -277,10 +315,126 @@ class EnhancedSitemapReporter:
         except asyncio.TimeoutError:
             info["status"] = "timeout"
         except aiohttp.ClientError as e:
-            info["status"] = f"error: {str(e)[:50]}"
+            err = str(e).strip().replace("\n", " ")
+            info["status"] = f"connection_error: {err[:120]}" if err else "connection_error"
         except Exception as e:
-            info["status"] = f"unknown_error: {str(e)[:50]}"
+            err = str(e).strip().replace("\n", " ")
+            info["status"] = f"unknown_error: {err[:120]}" if err else "unknown_error"
         return info
+
+    @staticmethod
+    def _finding_messages_by_url(scan_results: Dict[str, Any]) -> Dict[str, str]:
+        """Build a short scanner/heuristic message per URL from pipeline results."""
+        by_url: Dict[str, List[str]] = {}
+        for key in (
+            "nuclei_findings",
+            "header_findings",
+            "threat_findings",
+            "js_secrets",
+            "plugin_findings",
+        ):
+            for f in scan_results.get(key, []) or []:
+                if not isinstance(f, dict):
+                    continue
+                u = f.get("url") or f.get("matched-at") or f.get("matched_at")
+                if not u:
+                    continue
+                parts = []
+                tid = f.get("template-id") or f.get("template_id")
+                if tid:
+                    parts.append(f"template={tid}")
+                if f.get("name"):
+                    parts.append(str(f["name"]))
+                if f.get("type"):
+                    parts.append(f"type={f['type']}")
+                if f.get("matcher_name"):
+                    parts.append(str(f["matcher_name"]))
+                msg = "; ".join(parts) if parts else (
+                    str(f.get("info") or f.get("description") or "scanner finding")
+                )
+                by_url.setdefault(str(u), []).append(msg[:240])
+
+        return {u: " | ".join(msgs[:5]) for u, msgs in by_url.items()}
+
+    def _redirect_column(self, info: Dict[str, Any]) -> str:
+        st = info.get("status")
+        if isinstance(st, str):
+            low = st.lower()
+            if st == "timeout" or low.startswith(
+                ("connection_error", "error:", "unknown_error")
+            ):
+                return "none"
+        if info.get("redirect"):
+            return str(info["redirect"])
+        return str(info.get("url", ""))
+
+    @staticmethod
+    def _format_status_cell(status: Any, width: int = 20) -> str:
+        s = str(status) if status is not None else "unknown"
+        if len(s) <= width:
+            return f"{s:<{width}}"
+        return f"{s[: width - 2]}.."
+
+    def _row_reason(
+        self,
+        info: Dict[str, Any],
+        classification: str,
+        finding_msgs: Dict[str, str],
+    ) -> str:
+        url = info.get("url", "")
+        st = info.get("status")
+
+        if classification == "virus":
+            if url in finding_msgs:
+                return finding_msgs[url]
+            if self._is_suspicious_url(url):
+                return "URL matched suspicious pattern (automated heuristic)"
+            return (
+                "Automated heuristics flagged this row; verify with your security tooling"
+            )
+
+        if classification == "issue":
+            if isinstance(st, int) and st >= 500:
+                return (
+                    f"HTTP {st} server error (availability); not a malware verdict alone"
+                )
+            return "Server or availability issue (5xx); not a malware verdict alone"
+
+        if isinstance(st, int):
+            if st == 200:
+                return "No automated security flags for this URL"
+            if st == 404:
+                return "HTTP 404; no security heuristics triggered"
+            if st == 403:
+                return "HTTP 403 (authentication or forbidden; often expected)"
+            if st == 401:
+                return "HTTP 401 (authentication required; often expected)"
+            if 300 <= st < 400:
+                return (
+                    "HTTP redirect; see Redirect column for target; "
+                    "no security heuristics triggered"
+                )
+            if 400 <= st < 500:
+                return f"HTTP {st}; no security heuristics triggered"
+            return f"HTTP {st}; no security heuristics triggered"
+
+        if st == "timeout":
+            return "Request timed out; not a malware verdict alone"
+
+        s = str(st)
+        if s.startswith("connection_error") or s.startswith("error:") or s.startswith(
+            "unknown_error"
+        ):
+            return "Connection failed (network/TLS/DNS); not a malware verdict"
+
+        return "No automated security flags for this URL"
+
+    def _attach_reasons(
+        self, url_data: List[Dict[str, Any]], finding_msgs: Dict[str, str]
+    ) -> None:
+        for info in url_data:
+            cl = info.get("classification", "clean")
+            info["reason"] = self._row_reason(info, cl, finding_msgs)
 
     def _classify_vulnerabilities(
         self, url_data: List[Dict[str, Any]], scan_results: Dict[str, Any]
@@ -292,16 +446,22 @@ class EnhancedSitemapReporter:
             "js_secrets", "plugin_findings",
         ):
             for finding in scan_results.get(finding_type, []) or []:
-                if finding.get("url"):
-                    vuln_urls.add(finding["url"])
+                if not isinstance(finding, dict):
+                    continue
+                u = finding.get("url") or finding.get("matched-at") or finding.get("matched_at")
+                if u:
+                    vuln_urls.add(str(u))
 
         for info in url_data:
             url = info["url"]
             classification = "clean"
+            status = info.get("status")
             if url in vuln_urls:
                 classification = "virus"
             elif self._is_suspicious_url(url):
                 classification = "virus"
+            elif isinstance(status, int) and status >= 500:
+                classification = "issue"
             elif self._is_suspicious_response(info):
                 classification = "virus"
             info["classification"] = classification
@@ -311,9 +471,6 @@ class EnhancedSitemapReporter:
         return any(p.search(url) for p in self._compiled_suspicious)
 
     def _is_suspicious_response(self, info: Dict[str, Any]) -> bool:
-        status = info.get("status")
-        if isinstance(status, int) and status >= 500:
-            return True
         server = (info.get("server") or "").lower()
         if any(s in server for s in ("hack", "exploit", "malware")):
             return True
@@ -323,57 +480,88 @@ class EnhancedSitemapReporter:
         return False
 
     def _generate_report_file(self, url_data: List[Dict[str, Any]]) -> Path:
-        """Write report file in the required format and return its path."""
+        """Write report file matching SiteMap Guard Enhanced Reporter v4.2 layout."""
         now = datetime.now()
         timestamp = now.strftime("%Y%m%d_%H%M%S")
         clean_domain = re.sub(r"[^\w\-.]", "_", self.domain)
         filename = f"{clean_domain}_report_{timestamp}.txt"
         report_path = self.output_dir / filename
 
-        sorted_data = sorted(
-            url_data,
-            key=lambda x: (0 if x.get("classification") == "virus" else 1, x.get("url", "")),
-        )
+        sorted_data = sorted(url_data, key=lambda x: x.get("url", ""))
 
-        clean_count = sum(1 for x in url_data if x.get("classification") == "clean")
+        issue_count = sum(1 for x in url_data if x.get("classification") == "issue")
         virus_count = sum(1 for x in url_data if x.get("classification") == "virus")
+        clean_count = sum(1 for x in url_data if x.get("classification") == "clean")
+
+        st_w = 20
+        cl_w = 10
+        url_w = max((len(x.get("url", "")) for x in sorted_data), default=30)
+        url_w = min(max(url_w, 35), 90)
+        redir_w = max((len(self._redirect_column(x)) for x in sorted_data), default=20)
+        redir_w = min(max(redir_w, 35), 85)
 
         lines: List[str] = []
-        lines.append("=" * 100)
+        lines.append(_SEP)
         lines.append("ENHANCED SITEMAP VULNERABILITY REPORT")
-        lines.append("=" * 100)
+        lines.append(_SEP)
         lines.append(f"Target Domain : {self.domain}")
         lines.append(f"Scan Date     : {now.strftime('%Y-%m-%d %H:%M:%S')}")
         lines.append(f"Total URLs    : {len(url_data)}")
         lines.append(f"Clean URLs    : {clean_count}")
-        lines.append(f"Vulnerable    : {virus_count}")
-        lines.append("=" * 100)
+        lines.append(f"Issue (5xx)   : {issue_count}")
+        lines.append(f"Security      : {virus_count}")
+        lines.append(_SEP)
         lines.append("")
-        lines.append("FORMAT: URL | Status | Classification | Redirect")
+        lines.append("FORMAT: URL | Status | Classification | Redirect | Reason")
+        lines.append(
+            "  URL      : exact URL that was probed (discovered on your host, from HTML, or optional externals)"
+        )
+        lines.append(
+            "  Redirect : for 301/302/303/307/308, the Location target; for other responses, final/same URL;"
+        )
+        lines.append(
+            "             'none' only when the request could not be completed (timeouts, errors)."
+        )
+        lines.append(
+            "             Third-party rows (CDNs, GTM, etc.) appear only if you enabled external-asset probing;"
+        )
+        lines.append(
+            "             they are not vulnerabilities — same 'clean' only means the URL responded."
+        )
         lines.append("-" * 100)
 
         for info in sorted_data:
-            status = info.get("status")
-            status_str = str(status)[:20]
-            classification = info.get("classification", "clean")
-            redirect = info.get("redirect") or "none"
             url = info.get("url", "")
+            classification = info.get("classification", "clean")
+            reason = info.get("reason", "")
+            redirect = self._redirect_column(info)
+            status_cell = self._format_status_cell(info.get("status"), st_w)
 
-            display_url = url if len(url) <= 80 else url[:77] + "..."
-            display_redirect = redirect if len(redirect) <= 80 else redirect[:77] + "..."
-
-            lines.append(f"{display_url:<80} | {status_str:<10} | {classification:<10} | {display_redirect}")
+            lines.append(
+                f"{url:<{url_w}} | {status_cell} | {classification:<{cl_w}} | "
+                f"{redirect:<{redir_w}} | {reason}"
+            )
 
         lines.append("")
         lines.append("-" * 100)
         lines.append("LEGEND:")
         lines.append("  Status         : HTTP status code or error description")
-        lines.append("  Classification : 'clean' = no vulnerabilities, 'virus' = vulnerabilities detected")
-        lines.append("  Redirect       : target URL if redirect detected, 'none' otherwise")
+        lines.append(
+            "  Classification : clean = no security signals; issue = HTTP 5xx (availability, not malware);"
+        )
+        lines.append(
+            "                   virus = scanner finding or strong heuristic (see Reason)"
+        )
+        lines.append(
+            "  Redirect       : see FORMAT note above (Location vs final URL vs none on failure)"
+        )
+        lines.append(
+            "  Reason         : scanner/heuristic text, or short note — 'clean' is not a malware verdict alone"
+        )
         lines.append("-" * 100)
-        lines.append("Report generated by SiteMap Guard Enhanced Reporter v4.0")
+        lines.append(f"Report generated by SiteMap Guard Enhanced Reporter {REPORT_VERSION}")
         lines.append(f"Timestamp: {now.isoformat()}")
-        lines.append("=" * 100)
+        lines.append(_SEP)
 
         report_path.write_text("\n".join(lines), encoding="utf-8")
         return report_path

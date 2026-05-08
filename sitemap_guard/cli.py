@@ -446,6 +446,79 @@ def scan(url: str, output: str):
         pass
 
 
+@cli.command("sitemap")
+@click.argument("url")
+@click.option("--output", default="./reports", help="Output directory")
+@click.option(
+    "--max-urls",
+    default=5000,
+    type=click.IntRange(50, 100000),
+    help="Max URLs to discover and probe. Default 5000.",
+)
+@click.option(
+    "--full-scan",
+    is_flag=True,
+    default=False,
+    help="Run the full vulnerability pipeline before classifying URLs.",
+)
+@click.option(
+    "--include-external-assets",
+    is_flag=True,
+    default=False,
+    help="Also probe third-party CSS/JS URLs found in HTML (CDNs, etc.).",
+)
+def sitemap(
+    url: str,
+    output: str,
+    max_urls: int,
+    full_scan: bool,
+    include_external_assets: bool,
+):
+    """
+    Enhanced sitemap report (URL | Status | Classification | Redirect).
+
+    Examples:
+      python -m sitemap_guard sitemap https://example.com
+      python -m sitemap_guard https://example.com
+    """
+    console.print(
+        Panel.fit(
+            f"[bold blue]Enhanced Sitemap Reporter[/]\n"
+            f"Target: [cyan]{url}[/]\n"
+            f"Mode  : [yellow]"
+            f"{'Full scan + classify' if full_scan else 'Discovery + probe'}"
+            f"[/]",
+            border_style="blue",
+        )
+    )
+
+    def _run() -> str:
+        scan_results: dict = {}
+        if full_scan:
+            with console.status("[bold green]Running full pipeline...[/]"):
+                pipeline = BugBountyPipeline(target_url=url, output_dir=output)
+                scan_results = asyncio.run(pipeline.run())
+
+        reporter = EnhancedSitemapReporter(
+            target_url=url,
+            output_dir=output,
+            max_urls=max_urls,
+            include_external_assets=include_external_assets,
+        )
+        return asyncio.run(reporter.generate_enhanced_report(scan_results))
+
+    try:
+        report_path = _run()
+    except KeyboardInterrupt:
+        console.print("[yellow]Interrupted by user.[/]")
+        return
+    except Exception as e:
+        console.print(f"[bold red]Error:[/] {e}")
+        raise
+
+    console.print(f"\n[bold green]Sitemap report generated:[/] [cyan]{report_path}[/]")
+
+
 @cli.command()
 @click.option("--host", default="127.0.0.1", help="Host to bind to")
 @click.option("--port", default=8000, help="Port to bind to")
@@ -458,47 +531,20 @@ def serve(host: str, port: int):
     uvicorn.run("sitemap_guard.api:app", host=host, port=port, reload=True)
 
 
-@cli.command()
-@click.argument("url")
-@click.option("--output", default="./reports", help="Output directory")
-@click.option("--full-scan", is_flag=True, default=False,
-              help="Run the full vulnerability pipeline before classifying URLs.")
-def sitemap(url: str, output: str, full_scan: bool):
-    """
-    Generate the enhanced sitemap report:
-        URL | Status | Classification | Redirect
-
-    Saved as <domain>_report_<YYYYMMDD_HHMMSS>.txt in the output directory.
-    """
-    console.print(Panel.fit(
-        f"[bold blue]Enhanced Sitemap Reporter[/]\n"
-        f"Target: [cyan]{url}[/]\n"
-        f"Mode  : [yellow]{'Full scan + classify' if full_scan else 'Discovery + classify (fast)'}[/]",
-        border_style="blue",
-    ))
-
-    async def _run() -> str:
-        scan_results: dict = {}
-        if full_scan:
-            with console.status("[bold green]Running full pipeline...[/]"):
-                pipeline = BugBountyPipeline(target_url=url, output_dir=output)
-                scan_results = await pipeline.run()
-
-        reporter = EnhancedSitemapReporter(target_url=url, output_dir=output)
-        with console.status("[bold green]Discovering URLs and classifying...[/]"):
-            return await reporter.generate_enhanced_report(scan_results)
-
-    try:
-        report_path = asyncio.run(_run())
-    except KeyboardInterrupt:
-        console.print("[yellow]Interrupted by user.[/]")
-        return
-    except Exception as e:
-        console.print(f"[bold red]Error:[/] {e}")
-        raise
-
-    console.print(f"\n[bold green]Sitemap report generated:[/] [cyan]{report_path}[/]")
+def main() -> None:
+    _rest = sys.argv[1:]
+    if (
+        _rest
+        and not _rest[0].startswith("-")
+        and _rest[0] not in ("scan", "serve", "sitemap", "--help", "--version")
+        and (
+            _rest[0].startswith("http://")
+            or _rest[0].startswith("https://")
+        )
+    ):
+        sys.argv = [sys.argv[0], "sitemap"] + _rest
+    cli()
 
 
 if __name__ == "__main__":
-    cli()
+    main()
