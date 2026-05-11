@@ -494,6 +494,12 @@ def scan(url: str, output: str):
     type=click.IntRange(8, 320),
     help="Concurrent async HTTP workers for discovery + probe. Default 96.",
 )
+@click.option(
+    "--light",
+    is_flag=True,
+    default=False,
+    help="Light mode: only scan .html, .js files and main domain pages (excludes .php, .svg, etc.).",
+)
 def sitemap(
     url: str,
     output: str,
@@ -501,6 +507,7 @@ def sitemap(
     full_scan: bool,
     include_external_assets: bool,
     workers: int,
+    light: bool,
 ):
     """
     Enhanced sitemap report (URL | Status | Classification | Redirect).
@@ -534,6 +541,7 @@ def sitemap(
             max_urls=max_urls,
             include_external_assets=include_external_assets,
             workers=workers,
+            light_mode=light,
         )
         with Progress(
             SpinnerColumn(),

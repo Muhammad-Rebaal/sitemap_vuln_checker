@@ -109,6 +109,7 @@ class EnhancedSitemapReporter:
         max_urls: int = 5000,
         include_external_assets: bool = False,
         workers: int = 96,
+        light_mode: bool = False,
     ):
         if not target_url.startswith(("http://", "https://")):
             target_url = "https://" + target_url
@@ -119,12 +120,41 @@ class EnhancedSitemapReporter:
         self.max_urls = max(0, int(max_urls))
         self.include_external_assets = include_external_assets
         self.workers = max(8, min(int(workers), 320))
+        self.light_mode = light_mode
 
         self.ssl_context = ssl.create_default_context()
         self.ssl_context.check_hostname = False
         self.ssl_context.verify_mode = ssl.CERT_NONE
+        try:
+            self.ssl_context.set_ciphers("ALL:@SECLEVEL=0")
+        except ssl.SSLError:
+            pass
+        if hasattr(ssl, "OP_LEGACY_SERVER_CONNECT"):
+            self.ssl_context.options |= ssl.OP_LEGACY_SERVER_CONNECT
 
         self._compiled_suspicious = [re.compile(p, re.IGNORECASE) for p in self.SUSPICIOUS_URL_PATTERNS]
+
+    def _should_include_in_light_mode(self, url: str) -> bool:
+        """
+        Light mode filter: only include .html, .js files and pages without extensions.
+        Excludes: .php, .svg, .css, and other extensions.
+        """
+        if not self.light_mode:
+            return True
+        
+        parsed = urlparse(url)
+        path = parsed.path.lower()
+        
+        # No extension or ends with / (directory/main pages)
+        if not path or path.endswith('/') or '.' not in path.split('/')[-1]:
+            return True
+        
+        # Only allow .html and .js
+        if path.endswith('.html') or path.endswith('.htm') or path.endswith('.js'):
+            return True
+        
+        # Exclude everything else (.php, .svg, .css, .png, etc.)
+        return False
 
     async def generate_enhanced_report(
         self,
@@ -150,6 +180,11 @@ class EnhancedSitemapReporter:
 
         all_urls = await self._collect_all_urls(scan_results, progress, disc_task_id)
         all_urls = self._dedupe_cap_urls(all_urls)
+        
+        # Apply light mode filter if enabled
+        if self.light_mode:
+            all_urls = [u for u in all_urls if self._should_include_in_light_mode(u)]
+            logger.info("enhanced_reporter.light_mode", filtered_urls=len(all_urls))
 
         if progress is not None and disc_task_id is not None:
             progress.update(
@@ -446,13 +481,20 @@ class EnhancedSitemapReporter:
         self, timeout: int = 10, limit: Optional[int] = None
     ) -> aiohttp.ClientSession:
         lim = limit if limit is not None else max(32, self.workers)
+        import socket
+        from aiohttp import TCPConnector
+        from aiohttp.resolver import ThreadedResolver
+        resolver = ThreadedResolver()
         return aiohttp.ClientSession(
             headers=self.DEFAULT_HEADERS,
-            connector=aiohttp.TCPConnector(
+            connector=TCPConnector(
                 ssl=self.ssl_context,
                 limit=lim,
                 ttl_dns_cache=300,
                 enable_cleanup_closed=True,
+                family=socket.AF_INET,
+                use_dns_cache=True,
+                resolver=resolver,
             ),
             timeout=aiohttp.ClientTimeout(total=timeout),
         )
